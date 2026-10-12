@@ -1,0 +1,10 @@
+build/
+.DS_Store
+*.rvz
+*.iso
+*.wbfs
+*.wia
+*.gcz
+*.ciso
+*.sfc
+*.smc
