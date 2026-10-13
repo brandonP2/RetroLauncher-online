@@ -6,7 +6,7 @@ import SwiftUI
 
 enum Paths {
     static let dolphin = URL(fileURLWithPath: "/Applications/Dolphin.app/Contents/MacOS/Dolphin")
-    static let romsFolder = FileManager.default.homeDirectoryForCurrentUser
+    static let defaultRomsFolder = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Downloads/Wii Roms")
     static let support = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Wii Lanzador")
@@ -773,6 +773,12 @@ final class Launcher: ObservableObject {
     @Published var error: String?
     @Published private var modeOverrides: [String: String] =
         UserDefaults.standard.dictionary(forKey: "controlModes") as? [String: String] ?? [:]
+    /// Carpeta de juegos: la elegida en la app o, si no se ha elegido ninguna, Descargas → Wii Roms.
+    @Published private(set) var romsFolder: URL = {
+        guard let path = UserDefaults.standard.string(forKey: "romsFolder"), path.hasPrefix("/")
+        else { return Paths.defaultRomsFolder }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }()
 
     let covers = CoverStore()
     private var watcher: DispatchSourceFileSystemObject?
@@ -797,15 +803,32 @@ final class Launcher: ObservableObject {
     // MARK: Juegos
 
     func rescan() {
-        let found = Game.scan(Paths.romsFolder)
+        let found = Game.scan(romsFolder)
         if found != games { games = found }
         games.forEach(covers.load)
+    }
+
+    func chooseRomsFolder() {
+        let panel = NSOpenPanel()
+        panel.message = "Elige la carpeta donde tienes tus juegos"
+        panel.prompt = "Elegir"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.directoryURL = romsFolder
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        romsFolder = url
+        UserDefaults.standard.set(url.path, forKey: "romsFolder")
+        watchFolder()
+        rescan()
     }
 
     /// Vigila la carpeta: cuando se añade, borra o renombra un archivo, vuelve a escanear.
     /// Espera un momento para no leer archivos a medio copiar en cada cambio.
     private func watchFolder() {
-        let fd = Darwin.open(Paths.romsFolder.path, O_EVTONLY)
+        watcher?.cancel()
+        watcher = nil
+        let fd = Darwin.open(romsFolder.path, O_EVTONLY)
         guard fd >= 0 else { return }
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
@@ -1057,7 +1080,7 @@ final class Launcher: ObservableObject {
         }
         launchDolphin(id: game.id, fullscreen: fullscreen, quality: quality) {
             try DolphinConfig.write(for: mode(for: game), online: true)
-                + netplayArguments(games: Paths.romsFolder, ["HostCode=\(invite.code)"])
+                + netplayArguments(games: romsFolder, ["HostCode=\(invite.code)"])
         }
         joined = playing == game.id
     }
@@ -1080,18 +1103,27 @@ struct ContentView: View {
     @AppStorage("quality") private var quality = Quality.balanced
 
     private let columns = [GridItem(.adaptive(minimum: 170, maximum: 200), spacing: 28, alignment: .top)]
+    private var romsFolderName: String { (launcher.romsFolder.path as NSString).abbreviatingWithTildeInPath }
 
     var body: some View {
         VStack(spacing: 0) {
             Text("Wii")
                 .font(.system(size: 34, weight: .semibold, design: .rounded))
                 .padding(.top, 28)
-                .padding(.bottom, 20)
+            Button { launcher.chooseRomsFolder() } label: {
+                Label(romsFolderName, systemImage: "folder")
+            }
+            .buttonStyle(.link)
+            .font(.callout)
+            .help("Cambiar la carpeta de juegos")
+            .disabled(launcher.playing != nil)
+            .padding(.top, 4)
+            .padding(.bottom, 20)
 
             if launcher.games.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "opticaldisc").font(.system(size: 40)).foregroundStyle(.tertiary)
-                    Text("Pon tus juegos en ~/Downloads/Wii Roms").foregroundStyle(.secondary)
+                    Text("Pon tus juegos en \(romsFolderName)").foregroundStyle(.secondary)
                     Text("Aparecerán aquí automáticamente.").font(.callout).foregroundStyle(.tertiary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

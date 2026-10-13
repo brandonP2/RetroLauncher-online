@@ -43,6 +43,8 @@ mkdir -p ~/Downloads/"Wii Roms"
 
 Pon tus juegos en **Descargas → Wii Roms**. Aparecen en la app al momento, aunque esté abierta.
 
+¿Los tienes en otra carpeta? Haz clic en la ruta 📁 que aparece bajo el título de la app y elige la tuya. La app la recuerda la próxima vez.
+
 | Consola | Formatos |
 |---|---|
 | Wii y GameCube | `.rvz` `.iso` `.wbfs` `.wia` `.gcz` `.ciso` |
@@ -59,7 +61,7 @@ Haz clic en una portada. Para salir del juego, pulsa `Esc`.
 Debajo de cada portada puedes cambiar el **tipo de control** (Wiimote de lado, con Nunchuk o mando de GameCube). La app elige el adecuado para cada juego, así que normalmente no hace falta tocarlo.
 
 La primera vez, macOS te pedirá dos permisos. Acéptalos:
-- **Acceso a Descargas**, para encontrar tus juegos.
+- **Acceso a Descargas** (o a la carpeta que elijas), para encontrar tus juegos.
 - **Monitorización de entrada** para Dolphin, para poder jugar con el teclado. Se activa en *Ajustes del Sistema → Privacidad y seguridad*.
 
 ### 🎮 Mando de PS5
@@ -104,7 +106,7 @@ La app te guía paso a paso y te avisa si a tu amigo le falta el juego o tiene o
 |---|---|
 | El teclado no responde en el juego | Activa Dolphin en *Monitorización de entrada* y vuelve a abrir el juego. |
 | El mando de PS5 no responde | Conéctalo **antes** de abrir el juego. |
-| Un juego no aparece | Revisa que esté en **Descargas → Wii Roms** y que el formato sea uno de los de la tabla. |
+| Un juego no aparece | Revisa que esté en la carpeta que muestra la app bajo el título (por defecto **Descargas → Wii Roms**) y que el formato sea uno de los de la tabla. |
 | El juego va lento | Elige **Rendimiento** en la parte de abajo de la app. |
 | Online: "versión distinta" | Los dos jugadores: `brew upgrade --cask dolphin retroarch-metal` |
 
@@ -129,10 +131,10 @@ Sigue la sección "Instrucciones para Claude Code" del README.
    - Si falta `brew`, el instalador de Homebrew pide la contraseña del usuario. Pídele que lo ejecute él con `! /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` y que siga los pasos de "Next steps" que muestra al final.
 3. Instala los emuladores: `brew install --cask dolphin retroarch-metal`. Si alguno ya está, sigue adelante.
 4. Clona el repositorio en `~/Applications/wii-src` (o donde prefiera el usuario) y ejecuta `./build.sh`. Debe terminar con `Instalada en /Applications/Wii.app`.
-5. Crea la carpeta de juegos: `mkdir -p ~/Downloads/"Wii Roms"`.
+5. Crea la carpeta de juegos: `mkdir -p ~/Downloads/"Wii Roms"`. Si el usuario ya tiene sus juegos en otra carpeta, no los muevas: guárdala con `defaults write local.wii-lanzador romsFolder "<ruta absoluta>"` antes de abrir la app (o que la elija él con la ruta 📁 bajo el título).
 6. Abre la app con `open /Applications/Wii.app`.
 7. Explica al usuario, en su idioma:
-   - que ponga sus juegos en **Descargas → Wii Roms**;
+   - que ponga sus juegos en **Descargas → Wii Roms**, o que elija otra carpeta con la ruta 📁 bajo el título;
    - que acepte los permisos de *Descargas* y *Monitorización de entrada* (para Dolphin) la primera vez;
    - cómo conectar el mando de PS5 (sección "Mando de PS5").
 
