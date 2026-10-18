@@ -2,7 +2,7 @@
 
 **Este programa es para usuarios de Mac.**
 
-Juega a tus juegos de **Wii**, **GameCube** y **Super Nintendo** con un clic. Solo, con alguien a tu lado o con un amigo en otra casa.
+Juega a tus juegos de **Wii**, **GameCube**, **Super Nintendo**, **Nintendo 64** y a **DOOM** con un clic. Solo, con alguien a tu lado o con un amigo en otra casa.
 
 - 👥 **2 jugadores**: uno con el teclado y otro con un mando de PS5.
 - 🌐 **Online**: crea una partida y envía un enlace para invitar a alguien.
@@ -49,6 +49,8 @@ Pon tus juegos en **Descargas → Wii Roms**. Aparecen en la app al momento, aun
 |---|---|
 | Wii y GameCube | `.rvz` `.iso` `.wbfs` `.wia` `.gcz` `.ciso` |
 | Super Nintendo | `.sfc` `.smc` |
+| Nintendo 64 | `.z64` `.n64` `.v64` |
+| DOOM | `DOOM.WAD` (o `DOOM2.WAD`…), suelto o dentro de su carpeta |
 
 > Este proyecto no incluye juegos. Usa copias de juegos que tengas.
 
@@ -56,7 +58,7 @@ Pon tus juegos en **Descargas → Wii Roms**. Aparecen en la app al momento, aun
 
 ## Jugar
 
-Haz clic en una portada. Para salir del juego, pulsa `Esc`.
+Haz clic en una portada. Para salir del juego, pulsa `Esc` (en DOOM, `Esc` abre su menú: sal con *Quit Game* o cerrando la ventana).
 
 Debajo de cada portada puedes cambiar el **tipo de control** (Wiimote de lado, con Nunchuk o mando de GameCube). La app elige el adecuado para cada juego, así que normalmente no hace falta tocarlo.
 
@@ -91,7 +93,9 @@ Los dos jugadores necesitan esta app y **el mismo archivo del juego**.
 
 **Para unirte:** abre el enlace, o pégalo en **Unirse a partida**, y pulsa **Unirse**.
 
-| | Super Nintendo | Wii y GameCube |
+DOOM es de un jugador y no tiene modo online.
+
+| | Super Nintendo y Nintendo 64 | Wii y GameCube |
 |---|---|---|
 | Al invitar | No hay que hacer nada más | En Dolphin: *Tools → Start NetPlay… → Host* |
 | Al unirse | Escribe el PIN de 4 cifras que te muestra la app | En Dolphin: *Tools → Start NetPlay… → Connect* |

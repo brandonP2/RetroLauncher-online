@@ -8,3 +8,8 @@ build/
 *.ciso
 *.sfc
 *.smc
+*.z64
+*.n64
+*.v64
+*.wad
+*.WAD

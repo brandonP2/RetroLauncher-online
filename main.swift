@@ -16,16 +16,59 @@ enum Paths {
     static var netplayGames: URL { support.appendingPathComponent("NetPlay") }
     static let retroarch = URL(fileURLWithPath: "/Applications/RetroArch.app/Contents/MacOS/RetroArch")
     static var retroarchConfig: URL { support.appendingPathComponent("RetroArch/retroarch.cfg") }
-    static var snesCore: URL { support.appendingPathComponent("RetroArch/cores/snes9x_libretro.dylib") }
+    static var retroarchCores: URL { support.appendingPathComponent("RetroArch/cores") }
+    static var retroarchCoreOptions: URL { support.appendingPathComponent("RetroArch/core-options.cfg") }
 }
 
 // MARK: - Juegos
 
 enum Platform {
-    case wii, gamecube, snes
+    case wii, gamecube, snes, n64, doom
 
-    /// Wii y GameCube van con Dolphin; Super Nintendo con RetroArch.
-    var usesRetroArch: Bool { self == .snes }
+    /// Wii y GameCube van con Dolphin; el resto con RetroArch.
+    var usesRetroArch: Bool { core != nil }
+
+    /// Núcleo de RetroArch (se descarga la primera vez que se juega).
+    var core: String? {
+        switch self {
+        case .wii, .gamecube: nil
+        case .snes: "snes9x"
+        case .n64: "mupen64plus_next"
+        case .doom: "prboom"
+        }
+    }
+
+    var name: String {
+        switch self {
+        case .wii: "Wii"
+        case .gamecube: "GameCube"
+        case .snes: "Super Nintendo"
+        case .n64: "Nintendo 64"
+        case .doom: "DOOM"
+        }
+    }
+
+    /// DOOM es de un jugador y el núcleo no admite partidas online.
+    var supportsOnline: Bool { self != .doom }
+
+    /// Valor de «sistema» en los enlaces de invitación.
+    var inviteSystem: String {
+        switch self {
+        case .snes: "snes"
+        case .n64: "n64"
+        default: "wii"
+        }
+    }
+
+    /// Carpeta de libretro-thumbnails con las portadas.
+    var thumbnailSystem: String? {
+        switch self {
+        case .wii, .gamecube: nil
+        case .snes: "Nintendo - Super Nintendo Entertainment System"
+        case .n64: "Nintendo - Nintendo 64"
+        case .doom: "DOOM"
+        }
+    }
 }
 
 struct Game: Identifiable, Equatable {
@@ -39,18 +82,33 @@ struct Game: Identifiable, Equatable {
 
     static let extensions: Set<String> = ["rvz", "wia", "iso", "wbfs", "gcz", "ciso"]
     static let snesExtensions: Set<String> = ["sfc", "smc"]
+    static let n64Extensions: Set<String> = ["z64", "n64", "v64"]
+
+    /// IWAD de DOOM (en minúsculas) y su nombre en libretro-thumbnails.
+    static let doomWads: [(file: String, cover: String)] = [
+        ("doom.wad", "Doom"), ("doomu.wad", "Ultimate Doom, The"),
+        ("doom1.wad", "Doom (v1.9) (Demo)"), ("doom2.wad", "Doom II - Hell on Earth (v1.9)"),
+        ("plutonia.wad", "Final Doom - The Plutonia Experiment"),
+        ("tnt.wad", "Final Doom - TNT - Evilution"), ("freedoom1.wad", "Freedoom - Phase 1"),
+        ("freedoom2.wad", "Freedoom - Phase 2"),
+    ]
 
     static func scan(_ folder: URL) -> [Game] {
         let files = (try? FileManager.default.contentsOfDirectory(
-            at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
+            at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: .skipsHiddenFiles)) ?? []
         return files
             .compactMap { url -> Game? in
                 let ext = url.pathExtension.lowercased()
-                if snesExtensions.contains(ext) {
+                if snesExtensions.contains(ext) || n64Extensions.contains(ext) {
                     // El ID es el CRC32 del archivo: así dos personas con la misma ROM coinciden.
-                    guard let data = try? Data(contentsOf: url) else { return nil }
-                    return Game(id: String(format: "SNES-%08X", crc32(data)), title: cleanTitle(url),
-                                url: url, platform: .snes, coverName: coverName(url))
+                    let platform: Platform = snesExtensions.contains(ext) ? .snes : .n64
+                    guard let crc = cachedCRC(url) else { return nil }
+                    return Game(id: String(format: "\(platform == .snes ? "SNES" : "N64")-%08X", crc),
+                                title: cleanTitle(url), url: url, platform: platform,
+                                coverName: coverName(url))
+                }
+                if ext == "wad" || (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                    return doom(url)
                 }
                 guard extensions.contains(ext) else { return nil }
                 let header = readHeader(url)
@@ -84,6 +142,39 @@ struct Game: Identifiable, Equatable {
         return nil
     }
 
+    /// DOOM: un IWAD suelto (DOOM.WAD) o una carpeta que lo contiene (como la de la versión de DOS).
+    private static func doom(_ url: URL) -> Game? {
+        let wad: URL
+        if url.pathExtension.lowercased() == "wad" {
+            wad = url
+        } else {
+            let inside = (try? FileManager.default.contentsOfDirectory(
+                at: url, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
+            guard let found = doomWads.lazy.compactMap({ w in
+                inside.first { $0.lastPathComponent.lowercased() == w.file }
+            }).first else { return nil }
+            wad = found
+        }
+        let file = wad.lastPathComponent.lowercased()
+        guard let known = doomWads.first(where: { $0.file == file }) else { return nil }
+        let title = url == wad ? cleanTitle(url).capitalized : url.lastPathComponent
+        return Game(id: "DOOM-\(file.dropLast(4).uppercased())", title: title, url: wad,
+                    platform: .doom, coverName: known.cover)
+    }
+
+    /// Leer y calcular el CRC de una ROM grande tarda: se guarda mientras el archivo no cambie.
+    private static var crcCache: [String: (size: Int, date: Date, crc: UInt32)] = [:]
+
+    private static func cachedCRC(_ url: URL) -> UInt32? {
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let size = values?.fileSize ?? -1, date = values?.contentModificationDate ?? .distantPast
+        if let c = crcCache[url.path], c.size == size, c.date == date { return c.crc }
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let crc = crc32(data)
+        crcCache[url.path] = (size, date, crc)
+        return crc
+    }
+
     // "Super Bomberman 4 (Japan) [T-En by Svambo v1.0]" -> "Super Bomberman 4 (Japan)"
     private static func coverName(_ url: URL) -> String {
         url.deletingPathExtension().lastPathComponent
@@ -110,7 +201,7 @@ struct Game: Identifiable, Equatable {
 // MARK: - Tipo de control
 
 enum ControlMode: String, CaseIterable, Identifiable {
-    case sideways, nunchuk, gamecube, snes
+    case sideways, nunchuk, gamecube, snes, n64, doom, doomPad
 
     var id: String { rawValue }
 
@@ -120,6 +211,21 @@ enum ControlMode: String, CaseIterable, Identifiable {
         case .nunchuk: "Wiimote + Nunchuk"
         case .gamecube: "Mando de GameCube"
         case .snes: "Mando de Super Nintendo"
+        case .n64: "Mando de Nintendo 64"
+        case .doom: "Teclado"
+        case .doomPad: "DualSense"
+        }
+    }
+
+    /// Nombre corto para la ventana de controles.
+    var shortLabel: String {
+        switch self {
+        case .sideways: "De lado"
+        case .nunchuk: "Nunchuk"
+        case .gamecube: "GameCube"
+        case .snes: "SNES"
+        case .n64: "N64"
+        case .doom, .doomPad: "DOOM"
         }
     }
 
@@ -135,8 +241,13 @@ enum ControlMode: String, CaseIterable, Identifiable {
     ]
 
     static func automatic(for game: Game) -> ControlMode {
-        if game.platform == .gamecube { return .gamecube }
-        if game.platform == .snes { return .snes }
+        switch game.platform {
+        case .gamecube: return .gamecube
+        case .snes: return .snes
+        case .n64: return .n64
+        case .doom: return .doom
+        case .wii: break
+        }
         return nunchukGames.contains(String(game.id.prefix(3))) ? .nunchuk : .sideways
     }
 
@@ -144,6 +255,8 @@ enum ControlMode: String, CaseIterable, Identifiable {
         switch game.platform {
         case .gamecube: [.gamecube]
         case .snes: [.snes]
+        case .n64: [.n64]
+        case .doom: [.doom, .doomPad]
         case .wii: [.sideways, .nunchuk, .gamecube]
         }
     }
@@ -392,7 +505,7 @@ enum DolphinConfig {
             wiimotes = section("Wiimote1", device: keyboardDevice, source: 1, body: player1 + common)
                 + section("Wiimote2", device: dualsenseDevice, source: 1, body: ds + common)
             gcpads = section("GCPad1", device: keyboardDevice) + section("GCPad2", device: dualsenseDevice)
-        case .gamecube, .snes:
+        case .gamecube, .snes, .n64, .doom, .doomPad:
             wiimotes = section("Wiimote1", device: keyboardDevice, source: 0)
                 + section("Wiimote2", device: dualsenseDevice, source: 0)
             let player1 = online ? combined(gamecubeKeyboard, gamecubeDualSense) : gamecubeKeyboard
@@ -465,9 +578,10 @@ enum Quality: String, CaseIterable, Identifiable {
 
 /// Enlace de invitación.
 /// Wii/GameCube (Dolphin): wii://unirse?codigo=…&juego=…&titulo=…&v=…&anfitrion=…
-/// Super Nintendo (RetroArch): además sistema=snes, relay, puerto y clave; «codigo» es la sesión.
+/// Super Nintendo / Nintendo 64 (RetroArch): además sistema=snes|n64, relay, puerto y clave;
+/// «codigo» es la sesión.
 struct Invite: Equatable {
-    var system = "wii"  // "wii" (Dolphin) o "snes" (RetroArch)
+    var system = "wii"  // "wii" (Dolphin), "snes" o "n64" (RetroArch)
     let code: String  // código de anfitrión de Dolphin, o sesión del servidor de RetroArch
     let gameID: String
     let title: String
@@ -477,7 +591,7 @@ struct Invite: Equatable {
     var port: Int?
     var password: String?
 
-    var usesRetroArch: Bool { system == "snes" }
+    var usesRetroArch: Bool { system != "wii" }
 
     var url: URL {
         var c = URLComponents()
@@ -593,7 +707,7 @@ struct HostSession {
     var invite: Invite?
 }
 
-// MARK: - RetroArch (Super Nintendo)
+// MARK: - RetroArch (Super Nintendo, Nintendo 64 y DOOM)
 
 enum RetroArch {
     static let lobby = URL(string: "http://lobby.libretro.com/list/")!  // el servidor no tiene https
@@ -602,8 +716,10 @@ enum RetroArch {
     #else
     private static let arch = "x86_64"
     #endif
-    static let coreZip = URL(string:
-        "https://buildbot.libretro.com/nightly/apple/osx/\(arch)/latest/snes9x_libretro.dylib.zip")!
+
+    static func corePath(_ core: String) -> URL {
+        Paths.retroarchCores.appendingPathComponent("\(core)_libretro.dylib")
+    }
 
     static var installed: Bool { FileManager.default.fileExists(atPath: Paths.retroarch.path) }
 
@@ -613,21 +729,25 @@ enum RetroArch {
         return NSDictionary(contentsOf: plist)?["CFBundleShortVersionString"] as? String ?? "?"
     }
 
-    /// Descarga el núcleo Snes9x la primera vez que se juega a Super Nintendo.
-    static func ensureCore() async throws {
+    /// Descarga el núcleo de la consola la primera vez que se juega a ella.
+    static func ensureCore(for platform: Platform) async throws {
+        guard let core = platform.core else { return }
         let fm = FileManager.default
-        if fm.fileExists(atPath: Paths.snesCore.path) { return }
-        let (zip, _) = try await URLSession.shared.download(from: coreZip)
-        let folder = Paths.snesCore.deletingLastPathComponent()
+        let path = corePath(core)
+        if fm.fileExists(atPath: path.path) { return }
+        let url = URL(string:
+            "https://buildbot.libretro.com/nightly/apple/osx/\(arch)/latest/\(core)_libretro.dylib.zip")!
+        let (zip, _) = try await URLSession.shared.download(from: url)
+        let folder = Paths.retroarchCores
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let unzip = Process()
         unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
         unzip.arguments = ["-x", "-k", zip.path, folder.path]
         try unzip.run()
         unzip.waitUntilExit()
-        guard fm.fileExists(atPath: Paths.snesCore.path) else {
+        guard fm.fileExists(atPath: path.path) else {
             throw CocoaError(.fileNoSuchFile, userInfo: [
-                NSLocalizedDescriptionKey: "No se pudo descargar el núcleo de Super Nintendo."])
+                NSLocalizedDescriptionKey: "No se pudo descargar el núcleo de \(platform.name)."])
         }
     }
 
@@ -641,35 +761,84 @@ enum RetroArch {
         }
     }
 
+    /// Teclado del Jugador 1 en cada consola (botones del mando virtual de RetroArch).
+    private static func keyboard(_ platform: Platform) -> [String: String] {
+        let pad = ["up", "down", "left", "right", "a", "b", "x", "y", "l", "r", "l2", "r2",
+                   "start", "select", "l_x_minus", "l_x_plus", "l_y_minus", "l_y_plus",
+                   "r_x_minus", "r_x_plus", "r_y_minus", "r_y_plus"]
+        var keys = Dictionary(uniqueKeysWithValues: pad.map { ($0, "nul") })
+        switch platform {
+        case .n64:
+            // Mupen64Plus: A = B del mando virtual, B = Y, Z = L2, botones C = joystick derecho
+            keys.merge([
+                "l_x_minus": "left", "l_x_plus": "right", "l_y_minus": "up", "l_y_plus": "down",
+                "b": "x", "y": "z", "l2": "space", "l": "q", "r": "e", "start": "enter",
+                "r_x_minus": "j", "r_x_plus": "l", "r_y_minus": "i", "r_y_plus": "k",
+            ]) { _, new in new }
+        case .doom:
+            break  // PrBoom lee el teclado directamente (ver «input_libretro_device_p1»)
+        default:
+            keys.merge([
+                "up": "up", "down": "down", "left": "left", "right": "right",
+                "a": "x", "b": "z", "x": "s", "y": "a", "l": "q", "r": "w",
+                "start": "enter", "select": "rshift",
+            ]) { _, new in new }
+        }
+        return Dictionary(uniqueKeysWithValues: keys.map { ("input_player1_\($0.key)", $0.value) })
+    }
+
     /// Escribe la configuración. En local: Jugador 1 teclado, Jugador 2 DualSense.
     /// En online cada computadora controla a un jugador, con teclado o DualSense.
-    static func writeConfig(fullscreen: Bool, online: Bool, netplay: [String: String] = [:]) throws {
+    /// DOOM es de un jugador, con teclado o con DualSense (PrBoom no lee los dos a la vez).
+    static func writeConfig(_ platform: Platform, mode: ControlMode, quality: Quality, fullscreen: Bool,
+                            online: Bool, netplay: [String: String] = [:]) throws {
+        let dualSenseIsPlayer1 = online || platform == .doom
         var values: [String: String] = [
             "config_save_on_exit": "false",
             "video_fullscreen": fullscreen ? "true" : "false",
             "pause_nonactive": "false",
             "quit_press_twice": "false",
-            "input_exit_emulator": "escape",
-            "input_toggle_fast_forward": "nul",
-            "input_hold_fast_forward": "nul",
-            "input_rewind": "nul",
-            "input_player1_up": "up", "input_player1_down": "down",
-            "input_player1_left": "left", "input_player1_right": "right",
-            "input_player1_a": "x", "input_player1_b": "z",
-            "input_player1_x": "s", "input_player1_y": "a",
-            "input_player1_l": "q", "input_player1_r": "w",
-            "input_player1_start": "enter", "input_player1_select": "rshift",
-            // Mando 0 = DualSense. En local va al Jugador 2; en online al Jugador 1.
-            "input_player1_joypad_index": online ? "0" : "1",
-            "input_player2_joypad_index": online ? "1" : "0",
+            // En DOOM, Esc abre su menú: se sale con «Quit Game» o cerrando la ventana.
+            "input_exit_emulator": platform == .doom ? "nul" : "escape",
+            // Atajos de RetroArch que chocan con las teclas de los juegos
+            "input_toggle_fast_forward": "nul", "input_hold_fast_forward": "nul",
+            "input_rewind": "nul", "input_hold_slowmotion": "nul", "input_reset": "nul",
+            "input_pause_toggle": "nul", "input_frame_advance": "nul",
+            "input_netplay_game_watch": "nul", "input_shader_next": "nul", "input_shader_prev": "nul",
+            "input_movie_record": "nul", "input_cheat_index_plus": "nul",
+            "input_cheat_index_minus": "nul", "input_cheat_toggle": "nul",
+            // Mando 0 = DualSense. En local va al Jugador 2; en online (y en DOOM) al Jugador 1.
+            "input_player1_joypad_index": dualSenseIsPlayer1 ? "0" : "1",
+            "input_player2_joypad_index": dualSenseIsPlayer1 ? "1" : "0",
             "netplay_start_as_spectator": "false",
         ]
+        values.merge(keyboard(platform)) { _, new in new }
+        if platform == .doom {
+            // 3 = teclado y ratón; 773 = mando «moderno» de PrBoom (dos joysticks, R2 dispara)
+            values["input_libretro_device_p1"] = mode == .doomPad ? "773" : "3"
+        }
+        if platform == .n64 {
+            // GLideN64 (el renderizador por defecto) deja la pantalla en negro en Mac.
+            // ParaLLEl-RDP va por Vulkan (MoltenVK, incluido en RetroArch).
+            values["video_driver"] = "vulkan"
+        }
+        // Opciones de los núcleos en un archivo propio, para no depender de los de RetroArch.
+        let upscaling = switch quality { case .performance: "1x"; case .balanced: "2x"; case .max: "4x" }
+        let options = [
+            "mupen64plus-rdp-plugin": "parallel", "mupen64plus-rsp-plugin": "parallel",
+            "mupen64plus-parallel-rdp-upscaling": upscaling,
+        ]
+        values["global_core_options"] = "true"
+        values["core_options_path"] = Paths.retroarchCoreOptions.path
         values.merge(netplay) { _, new in new }
         let text = values.sorted { $0.key < $1.key }
             .map { "\($0.key) = \"\($0.value)\"" }.joined(separator: "\n") + "\n"
         try FileManager.default.createDirectory(
             at: Paths.retroarchConfig.deletingLastPathComponent(), withIntermediateDirectories: true)
         try text.write(to: Paths.retroarchConfig, atomically: true, encoding: .utf8)
+        try (options.sorted { $0.key < $1.key }.map { "\($0.key) = \"\($0.value)\"" }
+            .joined(separator: "\n") + "\n")
+            .write(to: Paths.retroarchCoreOptions, atomically: true, encoding: .utf8)
     }
 
     /// Busca la sala del anfitrión (por su apodo) en la lista pública de RetroArch.
@@ -697,7 +866,7 @@ final class CoverStore: ObservableObject {
     private var requested: Set<String> = []
 
     func load(_ game: Game) {
-        guard game.hasDiscID || game.platform == .snes, !requested.contains(game.id) else { return }
+        guard game.hasDiscID || game.platform.usesRetroArch, !requested.contains(game.id) else { return }
         requested.insert(game.id)
 
         // 1) Portadas incluidas en la app, 2) ya descargadas, 3) GameTDB
@@ -729,11 +898,11 @@ final class CoverStore: ObservableObject {
     }
 
     private static func coverURLs(for game: Game) -> [URL] {
-        if game.platform == .snes {
+        if let system = game.platform.thumbnailSystem {
             // Portadas de libretro-thumbnails, por nombre No-Intro ("&*/:`<>?\\|\"" se cambian por "_")
             let name = game.coverName.replacingOccurrences(
                 of: #"[&*/:`<>?\\|"]"#, with: "_", options: .regularExpression)
-            let base = "https://thumbnails.libretro.com/Nintendo - Super Nintendo Entertainment System"
+            let base = "https://thumbnails.libretro.com/\(system)"
             return ["Named_Boxarts", "Named_Titles"].compactMap {
                 URL(string: "\(base)/\($0)/\(name).png"
                     .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")
@@ -877,7 +1046,7 @@ final class Launcher: ObservableObject {
     func play(_ game: Game, fullscreen: Bool, quality: Quality) {
         if game.platform.usesRetroArch {
             launchRetroArch(game) {
-                try RetroArch.writeConfig(fullscreen: fullscreen, online: false)
+                try RetroArch.writeConfig(game.platform, mode: self.mode(for: game), quality: quality, fullscreen: fullscreen, online: false)
                 return []
             }
             return
@@ -913,7 +1082,7 @@ final class Launcher: ObservableObject {
         playing = game.id  // bloquea la interfaz mientras se prepara
         Task {
             do {
-                try await RetroArch.ensureCore()
+                try await RetroArch.ensureCore(for: game.platform)
             } catch {
                 self.playing = nil
                 self.error = error.localizedDescription
@@ -921,7 +1090,7 @@ final class Launcher: ObservableObject {
             }
             self.playing = nil
             run(Paths.retroarch, id: game.id) {
-                ["-L", Paths.snesCore.path, "--config", Paths.retroarchConfig.path]
+                ["-L", RetroArch.corePath(game.platform.core ?? "").path, "--config", Paths.retroarchConfig.path]
                     + (try extraArguments()) + [game.url.path]
             }
             if self.playing == game.id { onLaunch?() }
@@ -955,7 +1124,7 @@ final class Launcher: ObservableObject {
 
     func host(_ game: Game, fullscreen: Bool, quality: Quality) {
         game.platform.usesRetroArch
-            ? hostRetroArch(game, fullscreen: fullscreen)
+            ? hostRetroArch(game, fullscreen: fullscreen, quality: quality)
             : hostDolphin(game, fullscreen: fullscreen, quality: quality)
     }
 
@@ -987,7 +1156,7 @@ final class Launcher: ObservableObject {
 
     /// RetroArch aloja la sala a través de un servidor de retransmisión y la anuncia en su lista
     /// pública (con contraseña). La app la encuentra por el apodo y crea el enlace.
-    private func hostRetroArch(_ game: Game, fullscreen: Bool) {
+    private func hostRetroArch(_ game: Game, fullscreen: Bool, quality: Quality) {
         // RetroArch no deja pasar la contraseña al que se une: la tiene que escribir. Por eso es un
         // PIN corto, que su app le muestra. Sin él, cualquiera de la lista pública podría entrar.
         let pin = String(format: "%04d", Int.random(in: 0...9999))
@@ -997,7 +1166,7 @@ final class Launcher: ObservableObject {
             self.hostSession = session
             Task { await self.waitForInvite(session) }
         }) {
-            try RetroArch.writeConfig(fullscreen: fullscreen, online: true, netplay: [
+            try RetroArch.writeConfig(game.platform, mode: self.mode(for: game), quality: quality, fullscreen: fullscreen, online: true, netplay: [
                 "netplay_nickname": session.name,
                 "netplay_password": session.password,
                 "netplay_use_mitm_server": "true",
@@ -1016,7 +1185,7 @@ final class Launcher: ObservableObject {
             var invite: Invite?
             if game.platform.usesRetroArch {
                 if let s = await RetroArch.findSession(nickname: session.name) {
-                    invite = Invite(system: "snes", code: s.session, gameID: game.id, title: game.title,
+                    invite = Invite(system: game.platform.inviteSystem, code: s.session, gameID: game.id, title: game.title,
                                     version: RetroArch.version, host: NetPlay.nickname,
                                     relay: s.relay, port: s.port, password: session.password)
                 }
@@ -1068,7 +1237,7 @@ final class Launcher: ObservableObject {
         else { return }
         if invite.usesRetroArch, let relay = invite.relay, let port = invite.port {
             launchRetroArch(game, onLaunch: { self.joined = true }) {
-                try RetroArch.writeConfig(fullscreen: fullscreen, online: true, netplay: [
+                try RetroArch.writeConfig(game.platform, mode: self.mode(for: game), quality: quality, fullscreen: fullscreen, online: true, netplay: [
                     "netplay_nickname": NetPlay.nickname,
                     "netplay_use_mitm_server": "false",
                     "netplay_public_announce": "false",
@@ -1214,8 +1383,8 @@ struct GameCard: View {
             Button(action: play) {
                 ZStack {
                     if let cover = covers.images[game.id] {
-                        if game.platform == .snes {
-                            // Las cajas de Super Nintendo son apaisadas: se ven enteras sobre un fondo
+                        if game.platform.usesRetroArch {
+                            // Las cajas de SNES y N64 son apaisadas: se ven enteras sobre un fondo
                             // hecho con la misma portada, desenfocada.
                             Image(nsImage: cover).resizable().scaledToFill().blur(radius: 18)
                                 .overlay(.black.opacity(0.25))
@@ -1254,14 +1423,16 @@ struct GameCard: View {
 
             HStack(spacing: 6) {
                 modeMenu
-                Text("·").foregroundStyle(.tertiary)
-                Button(action: playOnline) {
-                    Label("Online", systemImage: "globe")
+                if game.platform.supportsOnline {
+                    Text("·").foregroundStyle(.tertiary)
+                    Button(action: playOnline) {
+                        Label("Online", systemImage: "globe")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                    .disabled(disabled)
+                    .help("Jugar online: crea una sala y un enlace para invitar a alguien")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
-                .disabled(disabled)
-                .help("Jugar online: crea una sala y un enlace para invitar a alguien")
             }
             .font(.subheadline)
         }
@@ -1544,6 +1715,26 @@ struct ControlsView: View {
             ("Start", "Enter", "Options"),
             ("Select", "Mayús derecha", "Create"),
         ]
+        case .n64: [
+            ("Joystick", "Flechas", "Joystick izq."),
+            ("A", "X", "✕"),
+            ("B", "Z", "□"),
+            ("Z", "Espacio", "L2"),
+            ("L / R", "Q / E", "L1 / R1"),
+            ("Botones C", "I J K L", "Joystick der."),
+            ("Start", "Enter", "Options"),
+        ]
+        case .doom, .doomPad: [
+            ("Moverse", "Flechas", "Joystick izq."),
+            ("Girar", "Flechas", "Joystick der."),
+            ("Disparar", "Ctrl", "R2"),
+            ("Abrir puertas", "Espacio", "□"),
+            ("Correr", "Mayús", "L2"),
+            ("Paso lateral", "Alt + Flechas", "Joystick izq."),
+            ("Cambiar arma", "1 – 7", "△ / ○"),
+            ("Mapa", "Tab", "Create"),
+            ("Menú · Quitar la demo", "Esc", "Options"),
+        ]
         case .gamecube: [
             ("Stick principal", "Flechas", "Joystick izq."),
             ("Stick C", "I J K L", "Joystick der."),
@@ -1560,40 +1751,47 @@ struct ControlsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Controles").font(.title2.weight(.semibold))
             Picker("Tipo de control", selection: $mode) {
-                ForEach(ControlMode.allCases) {
-                    Text($0 == .snes ? "Super Nintendo" : $0.label).tag($0)
-                }
+                ForEach(ControlMode.allCases.filter { $0 != .doomPad }) { Text($0.shortLabel).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 10) {
-                GridRow {
-                    Text("")
-                    Text("Jugador 1 · Teclado").fontWeight(.semibold)
-                    Text("Jugador 2 · DualSense").fontWeight(.semibold)
-                }
-                Divider().gridCellUnsizedAxes(.horizontal)
-                ForEach(rows, id: \.0) { row in
+            // Altura fija con scroll: la ventana no cambia de tamaño al cambiar de pestaña y nunca
+            // queda más alta que la ventana principal (los paneles se cortaban).
+            ScrollView {
+                Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 10) {
                     GridRow {
-                        Text(row.0).foregroundStyle(.secondary)
-                        Text(row.1)
-                        Text(row.2)
+                        Text("")
+                        Text(mode == .doom ? "Teclado" : "Jugador 1 · Teclado").fontWeight(.semibold)
+                        Text(mode == .doom ? "DualSense" : "Jugador 2 · DualSense").fontWeight(.semibold)
+                    }
+                    Divider().gridCellUnsizedAxes(.horizontal)
+                    ForEach(rows, id: \.0) { row in
+                        GridRow {
+                            Text(row.0).foregroundStyle(.secondary)
+                            Text(row.1)
+                            Text(row.2)
+                        }
                     }
                 }
+                .font(.callout)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .font(.callout)
-            Text("Salir del juego: Esc · Pantalla completa: ⌥ + Enter\nEl tipo de control de cada juego se cambia debajo de su portada.")
+            .frame(height: 300)
+            Text(mode == .doom
+                 ? "DOOM es de un jugador: elige Teclado o DualSense debajo de su portada.\nSalir: menú de DOOM → Quit Game, o cierra la ventana."
+                 : "Salir del juego: Esc · Pantalla completa: ⌥ + Enter\nEl tipo de control de cada juego se cambia debajo de su portada.")
                 .font(.footnote).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
                 Button("Listo") { dismiss() }.keyboardShortcut(.defaultAction)
             }
         }
-        .padding(28)
-        .frame(width: 540)
+        .padding(24)
+        .frame(width: 560)
     }
 }
 
