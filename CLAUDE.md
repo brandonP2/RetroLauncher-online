@@ -27,7 +27,7 @@ pkill -x Wii; open /Applications/Wii.app
 
 | Sección | Qué hace |
 |---|---|
-| Rutas (`Paths`) | Dolphin/RetroArch en `/Applications`, juegos en `~/Downloads/Wii Roms` (ruta fija), datos en `~/Library/Application Support/Wii Lanzador/` |
+| Rutas (`Paths`) | Dolphin/RetroArch en `/Applications`, juegos por defecto en `~/Downloads/Wii Roms` (configurable: `Launcher.romsFolder`, guardada en `UserDefaults` `romsFolder`), datos en `~/Library/Application Support/Wii Lanzador/` |
 | Juegos (`Platform`, `Game`) | Escanea la carpeta. ID de Wii/GC leído de la cabecera del disco (RVZ/WIA en 0x58, WBFS en 0x200, CISO en 0x8000, ISO en 0). Distingue Wii de GC por los números mágicos en +0x18 / +0x1C. SNES/N64: ID = `SNES-`/`N64-<CRC32 del archivo>` (caché por tamaño y fecha). DOOM: un IWAD conocido suelto o en una subcarpeta (p. ej. `DOOM/DOOM.WAD`), ID = `DOOM-<nombre>` |
 | Tipo de control (`ControlMode`) | `sideways` / `nunchuk` / `gamecube` / `snes` / `n64` / `doom`. Automático según plataforma y una lista de IDs que usan Nunchuk. El usuario lo cambia por juego (se guarda en `UserDefaults` `controlModes`) |
 | Configuración de Dolphin (`DolphinConfig`) | Reescribe `WiimoteNew.ini` y `GCPadNew.ini` en cada partida. `Dolphin.ini` solo se escribe la primera vez. En online combina teclado y DualSense en el Jugador 1 |
